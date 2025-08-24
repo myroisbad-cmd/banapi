@@ -275,15 +275,29 @@ def analyze_ban_data(df, selected_map, selected_mode):
     if filtered_df.empty:
         return pd.DataFrame()
     
-    # Collecter les données des bans
+    # Collecter les données des bans avec l'information du gagnant
     ban_data = []
     
     for idx, row in filtered_df.iterrows():
-        # Traiter les bans (Ban1 à Ban6)
-        for i in range(1, 7):  # Bans 1 à 6
-            ban = row[f'Ban{i}']
-            if pd.notna(ban) and ban != '':
-                ban_data.append({'Brawler': ban})
+        game_winner = row['game_winner']
+        banned_brawlers_a = str(row['banned_brawlers_a']) if pd.notna(row['banned_brawlers_a']) else ''
+        banned_brawlers_b = str(row['banned_brawlers_b']) if pd.notna(row['banned_brawlers_b']) else ''
+        
+        # Traiter les bans de l'équipe A
+        if banned_brawlers_a and banned_brawlers_a != '':
+            team_a_bans = [ban.strip() for ban in banned_brawlers_a.split(',') if ban.strip()]
+            for ban in team_a_bans:
+                # L'équipe A gagne si game_winner contient le nom de l'équipe A (ou si score_a > score_b)
+                team_won = game_winner == row['entrant_a_id'] if pd.notna(game_winner) else False
+                ban_data.append({'Brawler': ban, 'Won': team_won})
+        
+        # Traiter les bans de l'équipe B
+        if banned_brawlers_b and banned_brawlers_b != '':
+            team_b_bans = [ban.strip() for ban in banned_brawlers_b.split(',') if ban.strip()]
+            for ban in team_b_bans:
+                # L'équipe B gagne si game_winner contient le nom de l'équipe B
+                team_won = game_winner == row['entrant_b_id'] if pd.notna(game_winner) else False
+                ban_data.append({'Brawler': ban, 'Won': team_won})
     
     # Convertir les données récoltées en DataFrame
     ban_df = pd.DataFrame(ban_data)
@@ -295,15 +309,27 @@ def analyze_ban_data(df, selected_map, selected_mode):
     ban_counts = ban_df['Brawler'].value_counts().reset_index()
     ban_counts.columns = ['Brawler', 'Total Bans']
     
-    # Calculer le taux de ban (pourcentage)
+    # Calculer les victoires pour chaque brawler banni
+    victory_counts = ban_df[ban_df['Won'] == True]['Brawler'].value_counts().reset_index()
+    victory_counts.columns = ['Brawler', 'Victory Count']
+    
+    # Merger les dataframes
+    merged_df = pd.merge(ban_counts, victory_counts, on='Brawler', how='left')
+    merged_df['Victory Count'] = merged_df['Victory Count'].fillna(0).astype(int)
+    
+    # Calculer le win rate des équipes qui bannissent ce brawler
+    merged_df['Victory Rate (%)'] = (merged_df['Victory Count'] / merged_df['Total Bans']) * 100
+    merged_df['Victory Rate (%)'] = merged_df['Victory Rate (%)'].round(2)
+    
+    # Calculer le taux de ban (pourcentage par rapport au nombre total de matchs)
     total_matches = len(filtered_df)
-    ban_counts['Ban Rate (%)'] = (ban_counts['Total Bans'] / total_matches) * 100
-    ban_counts['Ban Rate (%)'] = ban_counts['Ban Rate (%)'].round(2)
+    merged_df['Ban Rate (%)'] = (merged_df['Total Bans'] / total_matches) * 100
+    merged_df['Ban Rate (%)'] = merged_df['Ban Rate (%)'].round(2)
     
     # Trier par nombre total de bans (décroissant)
-    ban_counts = ban_counts.sort_values('Total Bans', ascending=False)
+    merged_df = merged_df.sort_values('Total Bans', ascending=False)
     
-    return ban_counts
+    return merged_df
 
 # Callback pour mettre à jour la visualisation des bans
 @callback(
@@ -342,7 +368,9 @@ def update_ban_visualization(selected_map, selected_mode):
                     html.Th("Brawler"), 
                     html.Th("Icon"), 
                     html.Th("Total Bans"), 
-                    html.Th("Ban Rate (%)")
+                    html.Th("Ban Rate (%)"),
+                    html.Th("Victory Count"),
+                    html.Th("Victory Rate (%)")
                 ]))
             ]
             
@@ -364,7 +392,9 @@ def update_ban_visualization(selected_map, selected_mode):
                     html.Td(brawler_name),
                     html.Td(icon_img),
                     html.Td(row['Total Bans']),
-                    html.Td(f"{row['Ban Rate (%)']}%")
+                    html.Td(f"{row['Ban Rate (%)']}%"),
+                    html.Td(row['Victory Count']),
+                    html.Td(f"{row['Victory Rate (%)']}%")
                 ])
                 
                 rows.append(table_row)
@@ -417,15 +447,18 @@ def update_ban_visualization(selected_map, selected_mode):
     
     # Ajouter des informations sur les bans
     total_bans = stats_df['Total Bans'].sum()
+    total_victories = stats_df['Victory Count'].sum()
     total_brawlers = len(stats_df)
     top_10_bans = stats_df.head(10)['Total Bans'].sum()
     top_10_percentage = (top_10_bans / total_bans) * 100 if total_bans > 0 else 0
+    overall_win_rate = (total_victories / total_bans) * 100 if total_bans > 0 else 0
     
     ban_info = html.Div([
         html.H3(f"Ban Statistics for {selected_map} - {selected_mode}"),
         html.P(f"Total unique banned brawlers: {total_brawlers}"),
-        html.P(f"Top 10 brawlers make up {top_10_percentage:.2f}% of all bans"),
         html.P(f"Total bans recorded: {total_bans}"),
+        html.P(f"Overall win rate of teams that ban: {overall_win_rate:.2f}%"),
+        html.P(f"Top 10 brawlers make up {top_10_percentage:.2f}% of all bans"),
     ])
     
     return html.Div([
